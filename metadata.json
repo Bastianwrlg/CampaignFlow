@@ -1,0 +1,6 @@
+{
+  "name": "CampaignFlow Pro - Influencer Analytics & ROI Tracker",
+  "description": "Aplikasi pelacak kampanye media sosial, performa influencer, ringkasan biaya, dan kalkulator ROI terintegrasi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
