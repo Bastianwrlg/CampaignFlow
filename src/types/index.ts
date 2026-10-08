@@ -12,6 +12,8 @@ export interface ContentItem {
   shares: number;
   saves: number;
   totalEngagement: number;
+  isVerified?: boolean;
+  lastSyncedAt?: string;
 }
 
 export interface ContractItem {
@@ -77,7 +79,63 @@ export interface DashboardStats {
   totalReach: number;
   totalEngagement: number;
   platformBreakdown: { platform: string; count: number }[];
-  campaignBreakdown: { campaign: string; reach: number; engagement: number }[];
+  campaignBreakdown: {
+    campaign: string;
+    reach: number;
+    engagement: number;
+    contentCount?: number;
+    erPercent?: number;
+  }[];
   trend: { period: string; count: number }[];
-  topInfluencers: { influencer: string; erPercent: number }[];
+  topInfluencers: {
+    influencer: string;
+    erPercent: number;
+    reach?: number;
+    engagement?: number;
+    count?: number;
+  }[];
+  campaignPeriod?: PeriodFilter;
+  influencerPeriod?: PeriodFilter;
+  campaignDateRangeText?: string;
+  influencerDateRangeText?: string;
+  selectedCampaign?: string;
+  averageEr?: number;
+}
+
+export type PeriodFilter = 'all' | '3m' | '6m' | '9m' | '12m';
+export type CampaignSortKey = 'reach' | 'engagement' | 'er' | 'content' | 'name';
+export type InfluencerSortKey = 'er' | 'engagement' | 'reach' | 'content' | 'name';
+
+export interface CampaignAnalysisItem {
+  campaign: string;
+  totalContent: number;
+  totalReach: number;
+  totalEngagement: number;
+  erPercent: number;
+  influencerCount: number;
+  influencers: string[];
+  platforms: string[];
+}
+
+export interface InfluencerAnalysisItem {
+  influencer: string;
+  totalContent: number;
+  totalReach: number;
+  totalEngagement: number;
+  erPercent: number;
+  campaignCount: number;
+  campaigns: string[];
+  platforms: string[];
+}
+
+export interface PeriodAnalysisResult<T> {
+  period: PeriodFilter;
+  periodLabel: string;
+  dateRangeText: string;
+  totalItems: number;
+  totalContent: number;
+  totalReach: number;
+  totalEngagement: number;
+  avgErPercent: number;
+  items: T[];
 }

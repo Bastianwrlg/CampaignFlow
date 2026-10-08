@@ -57,7 +57,9 @@ export default function App() {
 
         {/* View Switcher */}
         <div className="animate-fade-in">
-          {currentPage === 'dashboard' && <DashboardView />}
+          {currentPage === 'dashboard' && (
+            <DashboardView onGoToDataKonten={() => setCurrentPage('data-konten')} />
+          )}
           {currentPage === 'input-data' && (
             <InputDataView
               onNotify={showToast}
@@ -68,6 +70,7 @@ export default function App() {
             <DataKontenView
               onNotify={showToast}
               onGoToInput={() => setCurrentPage('input-data')}
+              onGoToDashboard={() => setCurrentPage('dashboard')}
             />
           )}
           {currentPage === 'kontrak' && <KontrakView onNotify={showToast} />}

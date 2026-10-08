@@ -6,6 +6,12 @@ import {
   DashboardStats,
   InfluencerSummaryItem,
   RoiScoreItem,
+  PeriodFilter,
+  CampaignSortKey,
+  InfluencerSortKey,
+  CampaignAnalysisItem,
+  InfluencerAnalysisItem,
+  PeriodAnalysisResult,
 } from '../types';
 import {
   APP_VERSION,
@@ -16,12 +22,14 @@ import {
   initialContents,
   initialContracts,
 } from '../data/initialData';
+import { fetchMetricsFromUrl, LinkInspectionResult } from './linkFetcher';
 
 const STORAGE_KEYS = {
   CONTENTS: 'campaignflow_contents_v1',
   CONTRACTS: 'campaignflow_contracts_v1',
   BENCHMARKS: 'campaignflow_benchmarks_v1',
   COMPLIANCE: 'campaignflow_compliance_v1',
+  SELECTED_CAMPAIGN: 'campaignflow_selected_campaign_v1',
 };
 
 class CampaignStore {
@@ -29,10 +37,19 @@ class CampaignStore {
   private contracts: ContractItem[] = [];
   private benchmarks: BenchmarkItem[] = [];
   private compliance: ComplianceItem[] = [];
+  private selectedCampaign: string = '';
   private listeners: (() => void)[] = [];
 
   constructor() {
     this.loadFromStorage();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (e) => {
+        if (e.key && Object.values(STORAGE_KEYS).includes(e.key)) {
+          this.loadFromStorage();
+          this.notify();
+        }
+      });
+    }
   }
 
   private loadFromStorage() {
@@ -48,11 +65,15 @@ class CampaignStore {
 
       const storedCompliance = localStorage.getItem(STORAGE_KEYS.COMPLIANCE);
       this.compliance = storedCompliance ? JSON.parse(storedCompliance) : initialCompliance;
+
+      const storedSelectedCampaign = localStorage.getItem(STORAGE_KEYS.SELECTED_CAMPAIGN);
+      this.selectedCampaign = storedSelectedCampaign || '';
     } catch {
       this.contents = [...initialContents];
       this.contracts = [...initialContracts];
       this.benchmarks = [...initialBenchmarks];
       this.compliance = [...initialCompliance];
+      this.selectedCampaign = '';
     }
   }
 
@@ -97,6 +118,23 @@ class CampaignStore {
 
   getAppVersion() {
     return APP_VERSION;
+  }
+
+  getSelectedCampaign(): string {
+    return this.selectedCampaign || '';
+  }
+
+  setSelectedCampaign(campaign: string): void {
+    const trimmed = (campaign || '').trim();
+    if (this.selectedCampaign !== trimmed) {
+      this.selectedCampaign = trimmed;
+      try {
+        localStorage.setItem(STORAGE_KEYS.SELECTED_CAMPAIGN, this.selectedCampaign);
+      } catch (e) {
+        console.warn('Failed to save selected campaign:', e);
+      }
+      this.notify();
+    }
   }
 
   // CONTENT CRUD
@@ -169,10 +207,10 @@ class CampaignStore {
   }
 
   /**
-   * Mengupdate metrik reach, likes, comments, shares, dan saves secara otomatis
-   * dengan kalkulasi pertumbuhan engagement organik yang realistis.
+   * Mengupdate metrik postingan HANYA jika data asli live berhasil ditarik dari API link
+   * (TIDAK MENGARANG atau membuat angka acak sintetis)
    */
-  autoUpdateContentMetrics(targetId?: string): {
+  async autoUpdateContentMetrics(targetId?: string): Promise<{
     status: 'ok';
     updatedCount: number;
     updatedIds: string[];
@@ -184,7 +222,7 @@ class CampaignStore {
       savesAdded: number;
       engAdded: number;
     };
-  } {
+  }> {
     const targetItems = targetId
       ? this.contents.filter((c) => c.id === targetId)
       : this.contents;
@@ -196,53 +234,50 @@ class CampaignStore {
     let savesAdded = 0;
     const updatedIds: string[] = [];
 
-    targetItems.forEach((item) => {
-      // Pertumbuhan organik proporsional
-      // Platform multiplier: TikTok & Instagram Reels punya viralitas lebih tinggi
-      const isVideo = item.contentType.toLowerCase().includes('reel') || item.contentType.toLowerCase().includes('video');
-      const isTikTok = item.platform.toLowerCase().includes('tiktok');
-      const multiplier = isTikTok ? 1.4 : isVideo ? 1.2 : 1.0;
+    for (const item of targetItems) {
+      if (item.postLink && item.postLink.startsWith('http')) {
+        const prevReach = item.reach;
+        const prevLikes = item.likes;
+        const prevComments = item.comments;
+        const prevShares = item.shares;
+        const prevSaves = item.saves;
 
-      // Pertumbuhan Reach: 0.6% s/d 2.5% dari reach saat ini + flat 150 - 1200
-      const currentReach = item.reach || 10000;
-      const pctReach = Math.random() * 0.018 + 0.005;
-      const flatReach = Math.floor(Math.random() * 800) + 150;
-      const dReach = Math.max(100, Math.round((currentReach * pctReach + flatReach) * multiplier));
+        const inspection = await fetchMetricsFromUrl(item.postLink, {
+          reach: item.reach,
+          likes: item.likes,
+          comments: item.comments,
+          shares: item.shares,
+          saves: item.saves,
+        });
 
-      // Rasio Likes: ~4.5% s/d 8.5% dari penambahan reach
-      const dLikes = Math.max(5, Math.round(dReach * (Math.random() * 0.04 + 0.045)));
+        // Hanya perbarui jika data asli live berhasil ditarik dari server platform
+        if (inspection.dataSource === 'live_api') {
+          item.reach = inspection.metrics.reach;
+          item.likes = inspection.metrics.likes;
+          item.comments = inspection.metrics.comments;
+          item.shares = inspection.metrics.shares;
+          item.saves = inspection.metrics.saves;
+          item.totalEngagement = inspection.metrics.totalEngagement;
+          item.isVerified = true;
+          item.lastSyncedAt = new Date().toLocaleTimeString('id-ID');
 
-      // Rasio Comments: ~0.3% s/d 0.9% dari penambahan reach
-      const dComments = Math.max(1, Math.round(dReach * (Math.random() * 0.006 + 0.003)));
+          reachAdded += item.reach - prevReach;
+          likesAdded += item.likes - prevLikes;
+          commentsAdded += item.comments - prevComments;
+          sharesAdded += item.shares - prevShares;
+          savesAdded += item.saves - prevSaves;
+          updatedIds.push(item.id);
+        }
+      }
+    }
 
-      // Rasio Shares: ~0.5% s/d 1.5% dari penambahan reach
-      const dShares = Math.max(1, Math.round(dReach * (Math.random() * 0.01 + 0.005)));
-
-      // Rasio Saves: ~0.6% s/d 2.0% dari penambahan reach
-      const dSaves = Math.max(1, Math.round(dReach * (Math.random() * 0.014 + 0.006)));
-
-      const dEng = dLikes + dComments + dShares + dSaves;
-
-      item.reach += dReach;
-      item.likes += dLikes;
-      item.comments += dComments;
-      item.shares += dShares;
-      item.saves += dSaves;
-      item.totalEngagement += dEng;
-
-      reachAdded += dReach;
-      likesAdded += dLikes;
-      commentsAdded += dComments;
-      sharesAdded += dShares;
-      savesAdded += dSaves;
-      updatedIds.push(item.id);
-    });
-
-    this.saveToStorage();
+    if (updatedIds.length > 0) {
+      this.saveToStorage();
+    }
 
     return {
       status: 'ok',
-      updatedCount: targetItems.length,
+      updatedCount: updatedIds.length,
       updatedIds,
       stats: {
         reachAdded,
@@ -256,33 +291,118 @@ class CampaignStore {
   }
 
   /**
-   * Mensimulasikan sinkronisasi / fetch metrik langsung dari tautan media sosial
+   * Mengambil dan memperbarui metrik secara real time sesuai link URL postingan
    */
-  syncFromPostUrl(id: string): {
+  async syncFromPostUrl(id: string): Promise<{
     status: 'ok' | 'error';
     message?: string;
     item?: ContentItem;
-  } {
+    inspection?: LinkInspectionResult;
+  }> {
     const idx = this.contents.findIndex((c) => c.id === id);
     if (idx === -1) return { status: 'error', message: 'Konten tidak ditemukan.' };
 
     const item = this.contents[idx];
-    // Buat kenaikan metrik yang lebih masif untuk simulasi fetch sinkronisasi online
-    const dReach = Math.round(item.reach * (Math.random() * 0.04 + 0.02) + 1200);
-    const dLikes = Math.round(dReach * 0.062);
-    const dComments = Math.round(dReach * 0.005);
-    const dShares = Math.round(dReach * 0.008);
-    const dSaves = Math.round(dReach * 0.011);
+    const inspection = await fetchMetricsFromUrl(item.postLink, {
+      reach: item.reach,
+      likes: item.likes,
+      comments: item.comments,
+      shares: item.shares,
+      saves: item.saves,
+    });
 
-    item.reach += dReach;
-    item.likes += dLikes;
-    item.comments += dComments;
-    item.shares += dShares;
-    item.saves += dSaves;
-    item.totalEngagement = item.likes + item.comments + item.shares + item.saves;
+    if (inspection.isValid) {
+      item.reach = inspection.metrics.reach;
+      item.likes = inspection.metrics.likes;
+      item.comments = inspection.metrics.comments;
+      item.shares = inspection.metrics.shares;
+      item.saves = inspection.metrics.saves;
+      item.totalEngagement = inspection.metrics.totalEngagement;
+
+      // Auto update platform jika belum tepat
+      if (inspection.platform && inspection.platform !== 'Unknown' && inspection.platform !== 'Other Platform') {
+        item.platform = inspection.platform;
+      }
+
+      this.saveToStorage();
+      return { status: 'ok', item, inspection };
+    }
+
+    return { status: 'error', message: 'Tautan URL tidak valid atau kosong.', inspection };
+  }
+
+  /**
+   * Sinkronisasi seluruh postingan secara real time sesuai link masing-masing
+   */
+  async syncAllFromPostUrls(): Promise<{
+    status: 'ok';
+    syncedCount: number;
+    updatedIds: string[];
+    stats: {
+      reachAdded: number;
+      likesAdded: number;
+      commentsAdded: number;
+      sharesAdded: number;
+      savesAdded: number;
+      engAdded: number;
+    };
+  }> {
+    let reachAdded = 0;
+    let likesAdded = 0;
+    let commentsAdded = 0;
+    let sharesAdded = 0;
+    let savesAdded = 0;
+    const updatedIds: string[] = [];
+
+    for (const item of this.contents) {
+      if (item.postLink && item.postLink.startsWith('http')) {
+        const prevReach = item.reach;
+        const prevLikes = item.likes;
+        const prevComments = item.comments;
+        const prevShares = item.shares;
+        const prevSaves = item.saves;
+
+        const inspection = await fetchMetricsFromUrl(item.postLink, {
+          reach: item.reach,
+          likes: item.likes,
+          comments: item.comments,
+          shares: item.shares,
+          saves: item.saves,
+        });
+
+        if (inspection.isValid) {
+          item.reach = inspection.metrics.reach;
+          item.likes = inspection.metrics.likes;
+          item.comments = inspection.metrics.comments;
+          item.shares = inspection.metrics.shares;
+          item.saves = inspection.metrics.saves;
+          item.totalEngagement = inspection.metrics.totalEngagement;
+
+          reachAdded += item.reach - prevReach;
+          likesAdded += item.likes - prevLikes;
+          commentsAdded += item.comments - prevComments;
+          sharesAdded += item.shares - prevShares;
+          savesAdded += item.saves - prevSaves;
+          updatedIds.push(item.id);
+        }
+      }
+    }
 
     this.saveToStorage();
-    return { status: 'ok', item };
+
+    return {
+      status: 'ok',
+      syncedCount: updatedIds.length,
+      updatedIds,
+      stats: {
+        reachAdded,
+        likesAdded,
+        commentsAdded,
+        sharesAdded,
+        savesAdded,
+        engAdded: likesAdded + commentsAdded + sharesAdded + savesAdded,
+      },
+    };
   }
 
   getDistinctOptions() {
@@ -620,28 +740,291 @@ class CampaignStore {
     return results;
   }
 
-  getDashboardStats(): DashboardStats {
-    const totalCampaign = new Set(this.contents.map((r) => r.campaign).filter(Boolean)).size;
-    const totalContent = this.contents.length;
-    const totalReach = this.contents.reduce((s, r) => s + (Number(r.reach) || 0), 0);
-    const totalEngagement = this.contents.reduce((s, r) => s + (Number(r.totalEngagement) || 0), 0);
+  calculateDateWindow(period: PeriodFilter): {
+    startDate: Date | null;
+    endDate: Date | null;
+    dateRangeText: string;
+    periodLabel: string;
+  } {
+    if (period === 'all') {
+      return {
+        startDate: null,
+        endDate: null,
+        dateRangeText: 'Seluruh Waktu Tercatat',
+        periodLabel: 'Semua Periode',
+      };
+    }
+
+    const validDates = this.contents
+      .map((c) => (c.tanggal ? new Date(c.tanggal + 'T23:59:59').getTime() : NaN))
+      .filter((t) => !isNaN(t));
+
+    const anchorTime = validDates.length > 0 ? Math.max(...validDates) : new Date().getTime();
+    const anchorDate = new Date(anchorTime);
+
+    const monthsBack = period === '3m' ? 3 : period === '6m' ? 6 : period === '9m' ? 9 : 12;
+    const periodLabel =
+      period === '3m'
+        ? '3 Bulan Terakhir'
+        : period === '6m'
+        ? '6 Bulan Terakhir'
+        : period === '9m'
+        ? '9 Bulan Terakhir'
+        : '12 Bulan Terakhir (1 Tahun)';
+
+    const startDate = new Date(anchorDate);
+    startDate.setMonth(startDate.getMonth() - monthsBack);
+    startDate.setDate(1);
+    startDate.setHours(0, 0, 0, 0);
+
+    const endDate = new Date(anchorDate);
+    endDate.setHours(23, 59, 59, 999);
+
+    const startStr = startDate.toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+    const endStr = endDate.toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+
+    return {
+      startDate,
+      endDate,
+      dateRangeText: `${startStr} – ${endStr}`,
+      periodLabel,
+    };
+  }
+
+  filterContentsByPeriod(
+    contents: ContentItem[],
+    period: PeriodFilter
+  ): {
+    filtered: ContentItem[];
+    dateWindow: {
+      startDate: Date | null;
+      endDate: Date | null;
+      dateRangeText: string;
+      periodLabel: string;
+    };
+  } {
+    const window = this.calculateDateWindow(period);
+    if (!window.startDate || !window.endDate) {
+      return { filtered: contents, dateWindow: window };
+    }
+
+    const startTs = window.startDate.getTime();
+    const endTs = window.endDate.getTime();
+
+    const filtered = contents.filter((c) => {
+      if (!c.tanggal) return true;
+      const cDate = new Date(c.tanggal + 'T12:00:00').getTime();
+      return !isNaN(cDate) && cDate >= startTs && cDate <= endTs;
+    });
+
+    return { filtered, dateWindow: window };
+  }
+
+  getCampaignAnalysis(
+    period: PeriodFilter = 'all',
+    sortBy: CampaignSortKey = 'reach',
+    targetCampaign?: string
+  ): PeriodAnalysisResult<CampaignAnalysisItem> {
+    let source = this.contents;
+    if (targetCampaign && targetCampaign.trim()) {
+      const match = targetCampaign.trim().toLowerCase();
+      source = this.contents.filter((r) => (r.campaign || '').trim().toLowerCase() === match);
+    }
+    const { filtered, dateWindow } = this.filterContentsByPeriod(source, period);
+
+    const map: Record<
+      string,
+      {
+        totalContent: number;
+        totalReach: number;
+        totalEngagement: number;
+        influencers: Set<string>;
+        platforms: Set<string>;
+      }
+    > = {};
+
+    filtered.forEach((r) => {
+      const c = (r.campaign || 'Tanpa Nama Campaign').trim();
+      if (!map[c]) {
+        map[c] = {
+          totalContent: 0,
+          totalReach: 0,
+          totalEngagement: 0,
+          influencers: new Set(),
+          platforms: new Set(),
+        };
+      }
+      map[c].totalContent += 1;
+      map[c].totalReach += Number(r.reach) || 0;
+      map[c].totalEngagement += Number(r.totalEngagement) || 0;
+      if (r.influencer) map[c].influencers.add(r.influencer.trim());
+      if (r.platform) map[c].platforms.add(r.platform.trim());
+    });
+
+    const items: CampaignAnalysisItem[] = Object.entries(map).map(([campaign, d]) => {
+      const erPercent = d.totalReach > 0 ? Number(((d.totalEngagement / d.totalReach) * 100).toFixed(2)) : 0;
+      return {
+        campaign,
+        totalContent: d.totalContent,
+        totalReach: d.totalReach,
+        totalEngagement: d.totalEngagement,
+        erPercent,
+        influencerCount: d.influencers.size,
+        influencers: Array.from(d.influencers),
+        platforms: Array.from(d.platforms),
+      };
+    });
+
+    items.sort((a, b) => {
+      if (sortBy === 'reach') return b.totalReach - a.totalReach;
+      if (sortBy === 'engagement') return b.totalEngagement - a.totalEngagement;
+      if (sortBy === 'er') return b.erPercent - a.erPercent;
+      if (sortBy === 'content') return b.totalContent - a.totalContent;
+      if (sortBy === 'name') return a.campaign.localeCompare(b.campaign);
+      return b.totalReach - a.totalReach;
+    });
+
+    const totalReach = items.reduce((s, i) => s + i.totalReach, 0);
+    const totalEngagement = items.reduce((s, i) => s + i.totalEngagement, 0);
+    const totalContent = items.reduce((s, i) => s + i.totalContent, 0);
+    const avgErPercent = totalReach > 0 ? Number(((totalEngagement / totalReach) * 100).toFixed(2)) : 0;
+
+    return {
+      period,
+      periodLabel: dateWindow.periodLabel,
+      dateRangeText: dateWindow.dateRangeText,
+      totalItems: items.length,
+      totalContent,
+      totalReach,
+      totalEngagement,
+      avgErPercent,
+      items,
+    };
+  }
+
+  getInfluencerAnalysis(
+    period: PeriodFilter = 'all',
+    sortBy: InfluencerSortKey = 'er',
+    targetCampaign?: string
+  ): PeriodAnalysisResult<InfluencerAnalysisItem> {
+    let source = this.contents;
+    if (targetCampaign && targetCampaign.trim()) {
+      const match = targetCampaign.trim().toLowerCase();
+      source = this.contents.filter((r) => (r.campaign || '').trim().toLowerCase() === match);
+    }
+    const { filtered, dateWindow } = this.filterContentsByPeriod(source, period);
+
+    const map: Record<
+      string,
+      {
+        totalContent: number;
+        totalReach: number;
+        totalEngagement: number;
+        campaigns: Set<string>;
+        platforms: Set<string>;
+      }
+    > = {};
+
+    filtered.forEach((r) => {
+      const inf = (r.influencer || 'Tanpa Nama').trim();
+      if (!inf) return;
+      if (!map[inf]) {
+        map[inf] = {
+          totalContent: 0,
+          totalReach: 0,
+          totalEngagement: 0,
+          campaigns: new Set(),
+          platforms: new Set(),
+        };
+      }
+      map[inf].totalContent += 1;
+      map[inf].totalReach += Number(r.reach) || 0;
+      map[inf].totalEngagement += Number(r.totalEngagement) || 0;
+      if (r.campaign) map[inf].campaigns.add(r.campaign.trim());
+      if (r.platform) map[inf].platforms.add(r.platform.trim());
+    });
+
+    const items: InfluencerAnalysisItem[] = Object.entries(map).map(([influencer, d]) => {
+      const erPercent = d.totalReach > 0 ? Number(((d.totalEngagement / d.totalReach) * 100).toFixed(2)) : 0;
+      return {
+        influencer,
+        totalContent: d.totalContent,
+        totalReach: d.totalReach,
+        totalEngagement: d.totalEngagement,
+        erPercent,
+        campaignCount: d.campaigns.size,
+        campaigns: Array.from(d.campaigns),
+        platforms: Array.from(d.platforms),
+      };
+    });
+
+    items.sort((a, b) => {
+      if (sortBy === 'er') return b.erPercent - a.erPercent;
+      if (sortBy === 'engagement') return b.totalEngagement - a.totalEngagement;
+      if (sortBy === 'reach') return b.totalReach - a.totalReach;
+      if (sortBy === 'content') return b.totalContent - a.totalContent;
+      if (sortBy === 'name') return a.influencer.localeCompare(b.influencer);
+      return b.erPercent - a.erPercent;
+    });
+
+    const totalReach = items.reduce((s, i) => s + i.totalReach, 0);
+    const totalEngagement = items.reduce((s, i) => s + i.totalEngagement, 0);
+    const totalContent = items.reduce((s, i) => s + i.totalContent, 0);
+    const avgErPercent = totalReach > 0 ? Number(((totalEngagement / totalReach) * 100).toFixed(2)) : 0;
+
+    return {
+      period,
+      periodLabel: dateWindow.periodLabel,
+      dateRangeText: dateWindow.dateRangeText,
+      totalItems: items.length,
+      totalContent,
+      totalReach,
+      totalEngagement,
+      avgErPercent,
+      items,
+    };
+  }
+
+  getDashboardStats(
+    campaignPeriod: PeriodFilter = 'all',
+    influencerPeriod: PeriodFilter = 'all',
+    campaignSort: CampaignSortKey = 'reach',
+    influencerSort: InfluencerSortKey = 'er',
+    campaignFilter?: string
+  ): DashboardStats {
+    const activeCampaign = (campaignFilter !== undefined ? campaignFilter : this.selectedCampaign).trim();
+
+    let baseContents = this.contents;
+    if (activeCampaign) {
+      const match = activeCampaign.toLowerCase();
+      baseContents = this.contents.filter((r) => (r.campaign || '').trim().toLowerCase() === match);
+    }
+
+    const totalCampaign = activeCampaign
+      ? (baseContents.length > 0 ? 1 : 0)
+      : new Set(this.contents.map((r) => (r.campaign || '').trim()).filter(Boolean)).size;
+
+    const totalContent = baseContents.length;
+    const totalReach = baseContents.reduce((s, r) => s + (Number(r.reach) || 0), 0);
+    const totalEngagement = baseContents.reduce((s, r) => s + (Number(r.totalEngagement) || 0), 0);
+    const averageEr = totalReach > 0 ? Number(((totalEngagement / totalReach) * 100).toFixed(2)) : 0;
 
     const platformMap: Record<string, number> = {};
-    this.contents.forEach((r) => {
-      const p = r.platform || 'Lainnya';
+    baseContents.forEach((r) => {
+      const p = (r.platform || 'Lainnya').trim();
       platformMap[p] = (platformMap[p] || 0) + 1;
     });
 
-    const campaignMap: Record<string, { reach: number; engagement: number }> = {};
-    this.contents.forEach((r) => {
-      const c = r.campaign || 'Tanpa Nama';
-      if (!campaignMap[c]) campaignMap[c] = { reach: 0, engagement: 0 };
-      campaignMap[c].reach += Number(r.reach) || 0;
-      campaignMap[c].engagement += Number(r.totalEngagement) || 0;
-    });
-
     const trendMap: Record<string, number> = {};
-    this.contents.forEach((r) => {
+    baseContents.forEach((r) => {
       if (!r.tanggal) return;
       const key = r.tanggal.slice(0, 7); // yyyy-MM
       trendMap[key] = (trendMap[key] || 0) + 1;
@@ -650,26 +1033,41 @@ class CampaignStore {
       .sort()
       .map((k) => ({ period: k, count: trendMap[k] }));
 
-    const summaries = this.computeInfluencerSummaries();
-    const topInfluencers = summaries
-      .filter((s) => s.totalContent > 0)
-      .sort((a, b) => b.erPercent - a.erPercent)
-      .slice(0, 5)
-      .map((s) => ({ influencer: s.influencer, erPercent: s.erPercent }));
+    // Campaign breakdown dengan filter rentang waktu dan sorting (dan target campaign jika difilter)
+    const campaignAnalysis = this.getCampaignAnalysis(campaignPeriod, campaignSort, activeCampaign);
+    const campaignBreakdown = campaignAnalysis.items.map((i) => ({
+      campaign: i.campaign,
+      reach: i.totalReach,
+      engagement: i.totalEngagement,
+      contentCount: i.totalContent,
+      erPercent: i.erPercent,
+    }));
+
+    // Influencer breakdown dengan filter rentang waktu dan sorting (khusus campaign terpilih jika ada)
+    const influencerAnalysis = this.getInfluencerAnalysis(influencerPeriod, influencerSort, activeCampaign);
+    const topInfluencers = influencerAnalysis.items.slice(0, 8).map((i) => ({
+      influencer: i.influencer,
+      erPercent: i.erPercent,
+      reach: i.totalReach,
+      engagement: i.totalEngagement,
+      count: i.totalContent,
+    }));
 
     return {
       totalCampaign,
       totalContent,
       totalReach,
       totalEngagement,
+      averageEr,
       platformBreakdown: Object.keys(platformMap).map((k) => ({ platform: k, count: platformMap[k] })),
-      campaignBreakdown: Object.keys(campaignMap).map((k) => ({
-        campaign: k,
-        reach: campaignMap[k].reach,
-        engagement: campaignMap[k].engagement,
-      })),
+      campaignBreakdown,
       trend,
       topInfluencers,
+      campaignPeriod,
+      influencerPeriod,
+      campaignDateRangeText: campaignAnalysis.dateRangeText,
+      influencerDateRangeText: influencerAnalysis.dateRangeText,
+      selectedCampaign: activeCampaign,
     };
   }
 

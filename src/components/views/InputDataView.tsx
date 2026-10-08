@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { campaignStore } from '../../services/campaignStore';
 import { formatNumber } from '../../utils/formatters';
-import { CheckCircle2, RotateCcw } from 'lucide-react';
+import { CheckCircle2, RotateCcw, Link2, Sparkles, Loader2, Puzzle, ClipboardPaste, X, Info } from 'lucide-react';
+import { fetchMetricsFromUrl } from '../../services/linkFetcher';
+import { parseKolrData } from '../../services/kolrParser';
 
 interface InputDataViewProps {
   onNotify: (msg: string, isError?: boolean) => void;
@@ -22,6 +24,7 @@ export const InputDataView: React.FC<InputDataViewProps> = ({ onNotify, onSucces
   const [customPlatform, setCustomPlatform] = useState<string>('');
 
   const [postLink, setPostLink] = useState<string>('');
+  const [isFetchingLink, setIsFetchingLink] = useState<boolean>(false);
 
   const [contentType, setContentType] = useState<string>('Reels/Video');
   const [isCustomContentType, setIsCustomContentType] = useState<boolean>(false);
@@ -33,7 +36,104 @@ export const InputDataView: React.FC<InputDataViewProps> = ({ onNotify, onSucces
   const [shares, setShares] = useState<number>(0);
   const [saves, setSaves] = useState<number>(0);
 
+  // Kolr Extension Modal state
+  const [isKolrModalOpen, setIsKolrModalOpen] = useState<boolean>(false);
+  const [kolrRawText, setKolrRawText] = useState<string>('');
+
   const totalEngagement = (Number(likes) || 0) + (Number(comments) || 0) + (Number(shares) || 0) + (Number(saves) || 0);
+
+  const applyKolrText = (text: string) => {
+    setKolrRawText(text);
+    const parsedList = parseKolrData(text);
+    if (parsedList.length > 0) {
+      const item = parsedList[0];
+      if (item.reach) setReach(item.reach);
+      if (item.likes) setLikes(item.likes);
+      if (item.comments) setComments(item.comments);
+      if (item.shares) setShares(item.shares);
+      if (item.saves) setSaves(item.saves);
+      if (item.influencer && item.influencer !== 'Influencer Kolr' && !influencer) {
+        setInfluencer(item.influencer);
+      }
+      if (item.postLink && item.postLink !== '#' && !postLink) {
+        setPostLink(item.postLink);
+      }
+      if (item.platform) {
+        setPlatform(item.platform);
+        setIsCustomPlatform(false);
+      }
+      onNotify(
+        `Sukses membaca metrik Kolr: Reach ${formatNumber(item.reach || 0)}, Likes ${formatNumber(
+          item.likes || 0
+        )}, Comments ${formatNumber(item.comments || 0)}!`
+      );
+      setIsKolrModalOpen(false);
+      setKolrRawText('');
+    } else {
+      onNotify('Belum ada angka metrik yang terdeteksi dalam teks.', true);
+    }
+  };
+
+  const handlePasteClipboardKolr = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      applyKolrText(text);
+    } catch {
+      onNotify('Izin membaca clipboard ditolak oleh browser. Silakan tempel manual di kotak teks.', true);
+    }
+  };
+
+  // Auto-fetch data from Link
+  const handleAutoFetchFromLink = async () => {
+    if (!postLink || !postLink.trim() || !postLink.startsWith('http')) {
+      onNotify('Silakan masukkan Post Link (URL) yang valid terlebih dahulu.', true);
+      return;
+    }
+
+    setIsFetchingLink(true);
+    try {
+      const res = await fetchMetricsFromUrl(postLink);
+      if (res.isValid) {
+        if (res.platform && res.platform !== 'Unknown') {
+          setPlatform(res.platform);
+          setIsCustomPlatform(false);
+        }
+        if (res.contentType) {
+          setContentType(res.contentType);
+          setIsCustomContentType(false);
+        }
+        if (res.username && !influencer) {
+          setInfluencer(res.username);
+        }
+
+        if (res.dataSource === 'live_api') {
+          setReach(res.metrics.reach);
+          setLikes(res.metrics.likes);
+          setComments(res.metrics.comments);
+          setShares(res.metrics.shares);
+          setSaves(res.metrics.saves);
+
+          onNotify(
+            `Data ASLI live ditarik dari ${res.platform}: Reach ${formatNumber(
+              res.metrics.reach
+            )}, Likes ${formatNumber(res.metrics.likes)}, Comments ${formatNumber(res.metrics.comments)}!`
+          );
+        } else {
+          // Instagram atau platform dengan login-wall
+          onNotify(
+            `Tautan ${res.platform} terdeteksi (${res.postId}). Instagram memblokir data publik tanpa login akun Meta. Sistem TIDAK mengarang data — silakan masukkan angka riil yang tampil di postingan Anda.`,
+            false
+          );
+        }
+      } else {
+        onNotify('Format tautan tidak dikenali, gunakan link Instagram, TikTok, YouTube, atau X.', true);
+      }
+    } catch (e: any) {
+      onNotify('Gagal memeriksa tautan: ' + e.message, true);
+    } finally {
+      setIsFetchingLink(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,9 +216,37 @@ export const InputDataView: React.FC<InputDataViewProps> = ({ onNotify, onSucces
       <div className="h-1 w-full bg-gradient-to-r from-[#06d6a0] via-[#3b82f6] to-[#8b5cf6] absolute top-0 left-0" />
 
       <h2 className="text-xl font-extrabold text-white">Input Data Konten</h2>
-      <p className="text-xs text-[#94a3b8] mt-1 mb-6">
-        Masukkan detail performa konten/post influencer untuk kampanye berjalan.
+      <p className="text-xs text-[#94a3b8] mt-1 mb-4">
+        Masukkan detail performa konten/post influencer untuk kampanye berjalan. Dukungan auto-fetch real time dari link.
       </p>
+
+      {/* KOL.ID EXTENSION SHORTCUT BANNER */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-[#1e2a44] to-[#131c2e] border border-emerald-500/30 rounded-xl mb-6">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center font-bold text-xs text-[#06121f] shadow">
+            <Puzzle className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>Ambil Metrik dari Ekstensi KOL.ID</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono">
+                ID: kcobgdhc...
+              </span>
+            </div>
+            <p className="text-[11px] text-[#94a3b8]">
+              Isi otomatis Views, Likes, Comments, Saves dari overlay ekstensi KOL.ID di Instagram / TikTok
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsKolrModalOpen(true)}
+          className="px-3.5 py-1.5 bg-[#06d6a0] hover:bg-[#10b981] text-[#06121f] text-xs font-bold rounded-lg flex items-center gap-1.5 shadow transition-colors cursor-pointer"
+        >
+          <ClipboardPaste className="w-3.5 h-3.5" />
+          <span>Paste / Ambil dari KOL.ID</span>
+        </button>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Row 1: Tanggal & Campaign */}
@@ -224,19 +352,40 @@ export const InputDataView: React.FC<InputDataViewProps> = ({ onNotify, onSucces
           </div>
         </div>
 
-        {/* Row 3: Post Link & Content Type */}
+        {/* Row 3: Post Link with Auto-Fetch Button & Content Type */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-[11px] font-bold text-[#94a3b8] uppercase tracking-wider mb-1.5">
-              Post Link (URL)
-            </label>
-            <input
-              type="url"
-              value={postLink}
-              onChange={(e) => setPostLink(e.target.value)}
-              placeholder="https://instagram.com/p/..."
-              className="w-full bg-[#0f1729] border border-[#253449] rounded-lg px-3.5 py-2.5 text-sm text-[#f1f5f9] placeholder-[#64748b] focus:outline-none focus:border-[#3b82f6]"
-            />
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-[11px] font-bold text-[#94a3b8] uppercase tracking-wider">
+                Post Link (URL)
+              </label>
+              {postLink.startsWith('http') && (
+                <button
+                  type="button"
+                  onClick={handleAutoFetchFromLink}
+                  disabled={isFetchingLink}
+                  className="text-[10px] font-extrabold text-[#06d6a0] hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+                  title="Ambil data real-time langsung dari tautan ini"
+                >
+                  {isFetchingLink ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3 h-3" />
+                  )}
+                  <span>{isFetchingLink ? 'Mengambil...' : 'Fetch dari Link'}</span>
+                </button>
+              )}
+            </div>
+            <div className="relative">
+              <input
+                type="url"
+                value={postLink}
+                onChange={(e) => setPostLink(e.target.value)}
+                placeholder="https://instagram.com/p/... atau tiktok..."
+                className="w-full bg-[#0f1729] border border-[#253449] rounded-lg pl-8 pr-3.5 py-2.5 text-sm text-[#f1f5f9] placeholder-[#64748b] focus:outline-none focus:border-[#3b82f6]"
+              />
+              <Link2 className="w-4 h-4 text-[#64748b] absolute left-2.5 top-3" />
+            </div>
           </div>
 
           <div>
@@ -286,8 +435,21 @@ export const InputDataView: React.FC<InputDataViewProps> = ({ onNotify, onSucces
 
         {/* Section Metrik Performa */}
         <div className="pt-4 border-t border-[#253449]/70">
-          <div className="text-xs font-extrabold uppercase tracking-wider text-[#06d6a0] mb-3">
-            Metrik Interaksi & Performa
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs font-extrabold uppercase tracking-wider text-[#06d6a0]">
+              Metrik Interaksi & Performa
+            </div>
+            {postLink.startsWith('http') && (
+              <button
+                type="button"
+                onClick={handleAutoFetchFromLink}
+                disabled={isFetchingLink}
+                className="text-xs px-2.5 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-[#06d6a0] border border-emerald-500/30 flex items-center gap-1 font-semibold transition-all cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Auto-Isi Metrik dari Link URL</span>
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -392,6 +554,91 @@ export const InputDataView: React.FC<InputDataViewProps> = ({ onNotify, onSucces
           </button>
         </div>
       </form>
+
+      {/* MODAL PASTE / AMBIL DARI EKSTENSI KOL.ID */}
+      {isKolrModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#16213a] border border-[#253449] rounded-xl max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[#253449] mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-400">
+                  <Puzzle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                    <span>Ambil Data dari Ekstensi KOL.ID</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                      kcobgdhc...
+                    </span>
+                  </h3>
+                  <p className="text-xs text-[#94a3b8]">
+                    Isi otomatis form dengan metrik asli dari ekstensi KOL.ID Anda
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsKolrModalOpen(false)}
+                className="text-[#94a3b8] hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="p-3 bg-[#0f1729] rounded-lg border border-emerald-500/30 text-[#cbd5e1] text-[11px] space-y-2">
+                <div className="font-bold text-emerald-300">Cara Copy &amp; Paste dari Ekstensi KOL.ID:</div>
+                <ol className="list-decimal list-inside space-y-1 text-[#94a3b8]">
+                  <li>Buka postingan Reels/TikTok di tab browser Anda (di mana ekstensi KOL.ID aktif).</li>
+                  <li>Sorot / blok angka metrik (Views, Likes, Comments, Saves, Shares, ER) pada overlay KOL.ID, lalu tekan <kbd className="px-1 py-0.5 bg-black/40 border border-[#334155] rounded text-emerald-300 font-mono">Ctrl+C</kbd>.</li>
+                  <li>Kembali ke sini, lalu klik tombol hijau <strong>"Tempel Otomatis dari Clipboard"</strong> atau tekan <kbd className="px-1 py-0.5 bg-black/40 border border-[#334155] rounded text-emerald-300 font-mono">Ctrl+V</kbd> di kotak bawah.</li>
+                </ol>
+              </div>
+
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={handlePasteClipboardKolr}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-[#06121f] font-extrabold rounded-lg text-xs flex items-center justify-center gap-2 shadow transition-all cursor-pointer"
+                >
+                  <ClipboardPaste className="w-4 h-4" />
+                  <span>Tempel Otomatis dari Clipboard (1-Klik)</span>
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-[#94a3b8] uppercase mb-1.5">
+                  Atau Tempel (Ctrl+V) Teks Manual di Sini:
+                </label>
+                <textarea
+                  rows={4}
+                  value={kolrRawText}
+                  onChange={(e) => setKolrRawText(e.target.value)}
+                  placeholder={`Contoh teks dari KOL.ID:\nViews: 50.4K\nLikes: 1.2K\nComments: 45\nShares: 12\nSaves: 80\nER: 2.65%`}
+                  className="w-full bg-[#0f1729] border border-[#253449] rounded-lg p-3 text-xs text-[#f1f5f9] placeholder-[#64748b] focus:outline-none focus:border-[#06d6a0] font-mono"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => applyKolrText(kolrRawText)}
+                  className="flex-1 py-2.5 bg-[#06d6a0] hover:bg-[#10b981] text-[#06121f] font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  Terapkan ke Form Input
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsKolrModalOpen(false)}
+                  className="px-4 py-2.5 bg-[#1e2a44] text-[#94a3b8] hover:text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
