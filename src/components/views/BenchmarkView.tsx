@@ -84,7 +84,7 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({ onNotify }) => {
               </label>
               <input
                 type="number"
-                step="0.01"
+                step="any"
                 min="0"
                 value={erBenchmark}
                 onChange={(e) => setErBenchmark(e.target.value)}
@@ -98,7 +98,7 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({ onNotify }) => {
               </label>
               <input
                 type="number"
-                step="1"
+                step="any"
                 min="0"
                 value={cpeBenchmark}
                 onChange={(e) => setCpeBenchmark(e.target.value)}

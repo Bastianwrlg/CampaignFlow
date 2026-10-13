@@ -154,19 +154,30 @@ export const KontrakView: React.FC<KontrakViewProps> = ({ onNotify }) => {
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-[#94a3b8] uppercase tracking-wider mb-1.5">
-              Total Biaya Kontrak (Rp)
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-[11px] font-bold text-[#94a3b8] uppercase tracking-wider">
+                Total Biaya Kontrak (Rp)
+              </label>
+              <span className="text-[10px] text-sky-400 font-medium">Bisa angka bebas nominal berapapun</span>
+            </div>
             <input
               type="number"
               min="0"
-              step="100000"
+              step="any"
               value={totalBiaya}
               onChange={(e) => setTotalBiaya(e.target.value)}
-              placeholder="Contoh: 45000000"
+              placeholder="Contoh: 1950000 atau 45000000"
               required
               className="w-full bg-[#0f1729] border border-[#253449] rounded-lg px-3.5 py-2.5 text-base font-bold text-[#06d6a0] focus:outline-none focus:border-[#3b82f6]"
             />
+            {totalBiaya !== '' && !isNaN(Number(totalBiaya)) && Number(totalBiaya) > 0 && (
+              <div className="mt-1.5 flex items-center justify-between text-xs px-1">
+                <span className="text-[#94a3b8] text-[11px]">Terbaca:</span>
+                <span className="font-bold text-[#06d6a0] font-mono">
+                  {formatRupiah(Number(totalBiaya))}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="pt-2 flex gap-2">
